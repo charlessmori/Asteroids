@@ -136,12 +136,14 @@ class Asteroid {
 const SHIELD_RADIUS = 24;
 const SLOW_FACTOR   = 0.5;
 const SLOW_DURATION = 6;
+const NOVA_MIN_ASTEROIDS = 10;   // "muchos asteroides"
 
 class Ship {
   constructor() {
     this.tripleShot = 0;
     this.shield     = 0;
     this.slowMotion = 0;
+    this.novaBomb   = false;
     this.reset();
   }
 
@@ -311,6 +313,7 @@ class PowerUp {
       triple: { color: '#0ff', label: '3',  font: 'bold 13px monospace' },
       shield: { color: '#4af', label: 'S',  font: 'bold 13px monospace' },
       slow:   { color: '#f44', label: 'SM', font: 'bold 10px monospace' },
+      nova:   { color: '#fa0', label: 'N',  font: 'bold 13px monospace' },
     };
     const { color, label, font } = STYLE[this.type];
     ctx.save();
@@ -331,12 +334,42 @@ class PowerUp {
   }
 }
 
+// ── Onda de la Bomba Nova ─────────────────────────────────────────────────────
+class NovaWave {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.life = 0.6;
+    this.ttl  = this.life;
+    this.dead = false;
+    this.maxRadius = Math.hypot(W, H);
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    const t = 1 - Math.max(this.ttl, 0) / this.life;
+    const radius = t * this.maxRadius;
+    const alpha  = 1 - t;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,170,0,${alpha.toFixed(2)})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── Estado del juego ──────────────────────────────────────────────────────────
 let ship, bullets, asteroids, particles, powerUps;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
-let killCount, powerUpDropAt, shieldDropAt, slowDropAt;
+let killCount, powerUpDropAt, shieldDropAt, slowDropAt, novaDropPending;
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -368,6 +401,7 @@ function initGame() {
   do {
     slowDropAt = randInt(3, 12);
   } while (slowDropAt === powerUpDropAt || slowDropAt === shieldDropAt);
+  novaDropPending = true;
   spawnAsteroids(4);
 }
 
@@ -381,6 +415,17 @@ function nextLevel() {
 
 function explode(x, y, count = 8) {
   for (let i = 0; i < count; i++) particles.push(new Particle(x, y));
+}
+
+function detonateNova() {
+  ship.novaBomb = false;
+  for (const a of asteroids) {
+    score += POINTS[a.size];
+    explode(a.x, a.y, a.size * 5);
+    killCount++;
+  }
+  asteroids = [];
+  particles.push(new NovaWave(ship.x, ship.y));
 }
 
 function killShip() {
@@ -424,6 +469,9 @@ function update(dt) {
     bullets.push(...ship.tryShoot());
   }
 
+  // Detonar Bomba Nova
+  if (pressed('KeyB') && ship.novaBomb) detonateNova();
+
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
   const asteroidDt = ship.slowMotion > 0 ? dt * SLOW_FACTOR : dt;
@@ -450,6 +498,10 @@ function update(dt) {
         if (killCount === powerUpDropAt) powerUps.push(new PowerUp(a.x, a.y, 'triple'));
         if (killCount === shieldDropAt)  powerUps.push(new PowerUp(a.x, a.y, 'shield'));
         if (killCount === slowDropAt)    powerUps.push(new PowerUp(a.x, a.y, 'slow'));
+        if (novaDropPending && asteroids.length >= NOVA_MIN_ASTEROIDS) {
+          powerUps.push(new PowerUp(a.x, a.y, 'nova'));
+          novaDropPending = false;
+        }
       }
     }
   }
@@ -480,6 +532,7 @@ function update(dt) {
         p.dead = true;
         if (p.type === 'shield') ship.shield = 5;
         else if (p.type === 'slow') ship.slowMotion = SLOW_DURATION;
+        else if (p.type === 'nova') ship.novaBomb = true;
         else ship.tripleShot = 5;
         explode(p.x, p.y, 10);
       }
@@ -537,6 +590,11 @@ function drawHUD() {
   if (ship.slowMotion > 0) {
     ctx.fillStyle = '#f44';
     ctx.fillText(`SLOW  ${Math.ceil(ship.slowMotion)}s`, 14, statusY);
+    statusY += 20;
+  }
+  if (ship.novaBomb) {
+    ctx.fillStyle = '#fa0';
+    ctx.fillText('NOVA  [B]', 14, statusY);
   }
 }
 
