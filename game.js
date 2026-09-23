@@ -115,11 +115,11 @@ class Asteroid {
     ];
   }
 
-  draw() {
+  draw(slowed = false) {
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.rot);
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = slowed ? '#f88' : '#fff';
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
     ctx.beginPath();
@@ -134,11 +134,14 @@ class Asteroid {
 
 // ── Ship ──────────────────────────────────────────────────────────────────────
 const SHIELD_RADIUS = 24;
+const SLOW_FACTOR   = 0.5;
+const SLOW_DURATION = 6;
 
 class Ship {
   constructor() {
     this.tripleShot = 0;
     this.shield     = 0;
+    this.slowMotion = 0;
     this.reset();
   }
 
@@ -161,6 +164,7 @@ class Ship {
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.tripleShot    > 0) this.tripleShot    -= dt;
     if (this.shield        > 0) this.shield        -= dt;
+    if (this.slowMotion    > 0) this.slowMotion    -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = 260;  // px/s²
@@ -303,8 +307,12 @@ class PowerUp {
 
   draw() {
     if (this.ttl < 2 && Math.floor(this.ttl * 8) % 2 === 0) return;
-    const color = this.type === 'shield' ? '#4af' : '#0ff';
-    const label = this.type === 'shield' ? 'S' : '3';
+    const STYLE = {
+      triple: { color: '#0ff', label: '3',  font: 'bold 13px monospace' },
+      shield: { color: '#4af', label: 'S',  font: 'bold 13px monospace' },
+      slow:   { color: '#f44', label: 'SM', font: 'bold 10px monospace' },
+    };
+    const { color, label, font } = STYLE[this.type];
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.rot);
@@ -315,7 +323,7 @@ class PowerUp {
     ctx.stroke();
     ctx.restore();
     ctx.fillStyle = color;
-    ctx.font = 'bold 13px monospace';
+    ctx.font = font;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, this.x, this.y + 1);
@@ -328,7 +336,7 @@ let ship, bullets, asteroids, particles, powerUps;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
-let killCount, powerUpDropAt, shieldDropAt;
+let killCount, powerUpDropAt, shieldDropAt, slowDropAt;
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -357,6 +365,9 @@ function initGame() {
   do {
     shieldDropAt = randInt(3, 12);
   } while (shieldDropAt === powerUpDropAt);
+  do {
+    slowDropAt = randInt(3, 12);
+  } while (slowDropAt === powerUpDropAt || slowDropAt === shieldDropAt);
   spawnAsteroids(4);
 }
 
@@ -377,6 +388,7 @@ function killShip() {
   ship.dead = true;
   ship.tripleShot = 0;
   ship.shield = 0;
+  ship.slowMotion = 0;
   lives--;
   if (lives <= 0) {
     state = 'gameover';
@@ -399,7 +411,8 @@ function update(dt) {
     deadTimer -= dt;
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
-    asteroids.forEach(a => a.update(dt));
+    const deadAsteroidDt = ship.slowMotion > 0 ? dt * SLOW_FACTOR : dt;
+    asteroids.forEach(a => a.update(deadAsteroidDt));
     powerUps.forEach(p => p.update(dt));
     powerUps = powerUps.filter(p => !p.dead);
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
@@ -413,7 +426,8 @@ function update(dt) {
 
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
-  asteroids.forEach(a => a.update(dt));
+  const asteroidDt = ship.slowMotion > 0 ? dt * SLOW_FACTOR : dt;
+  asteroids.forEach(a => a.update(asteroidDt));
   particles.forEach(p => p.update(dt));
   powerUps.forEach(p => p.update(dt));
 
@@ -435,6 +449,7 @@ function update(dt) {
         killCount++;
         if (killCount === powerUpDropAt) powerUps.push(new PowerUp(a.x, a.y, 'triple'));
         if (killCount === shieldDropAt)  powerUps.push(new PowerUp(a.x, a.y, 'shield'));
+        if (killCount === slowDropAt)    powerUps.push(new PowerUp(a.x, a.y, 'slow'));
       }
     }
   }
@@ -464,6 +479,7 @@ function update(dt) {
       if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
         p.dead = true;
         if (p.type === 'shield') ship.shield = 5;
+        else if (p.type === 'slow') ship.slowMotion = SLOW_DURATION;
         else ship.tripleShot = 5;
         explode(p.x, p.y, 10);
       }
@@ -516,6 +532,11 @@ function drawHUD() {
   if (ship.shield > 0) {
     ctx.fillStyle = '#4af';
     ctx.fillText(`ESCUDO  ${Math.ceil(ship.shield)}s`, 14, statusY);
+    statusY += 20;
+  }
+  if (ship.slowMotion > 0) {
+    ctx.fillStyle = '#f44';
+    ctx.fillText(`SLOW  ${Math.ceil(ship.slowMotion)}s`, 14, statusY);
   }
 }
 
@@ -534,7 +555,7 @@ function draw() {
   ctx.fillRect(0, 0, W, H);
 
   particles.forEach(p => p.draw());
-  asteroids.forEach(a => a.draw());
+  asteroids.forEach(a => a.draw(ship.slowMotion > 0));
   powerUps.forEach(p => p.draw());
   bullets.forEach(b => b.draw());
   ship.draw();
