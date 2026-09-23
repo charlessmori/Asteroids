@@ -137,13 +137,18 @@ const SHIELD_RADIUS = 24;
 const SLOW_FACTOR   = 0.5;
 const SLOW_DURATION = 6;
 const NOVA_MIN_ASTEROIDS = 10;   // "muchos asteroides"
+const HYPER_DURATION    = 8;
+const HYPER_THRUST_MULT = 2.5;
+const HYPER_DRAG        = 0.993;
+const HYPER_ROT_MULT    = 1.4;
 
 class Ship {
   constructor() {
-    this.tripleShot = 0;
-    this.shield     = 0;
-    this.slowMotion = 0;
-    this.novaBomb   = false;
+    this.tripleShot  = 0;
+    this.shield      = 0;
+    this.slowMotion  = 0;
+    this.novaBomb    = false;
+    this.hyperThrust = 0;
     this.reset();
   }
 
@@ -167,10 +172,12 @@ class Ship {
     if (this.tripleShot    > 0) this.tripleShot    -= dt;
     if (this.shield        > 0) this.shield        -= dt;
     if (this.slowMotion    > 0) this.slowMotion    -= dt;
+    if (this.hyperThrust   > 0) this.hyperThrust   -= dt;
 
-    const ROT   = 3.5;   // rad/s
-    const THRUST = 260;  // px/s²
-    const DRAG   = 0.987;
+    const hyper  = this.hyperThrust > 0;
+    const ROT    = 3.5 * (hyper ? HYPER_ROT_MULT : 1);     // rad/s
+    const THRUST = 260 * (hyper ? HYPER_THRUST_MULT : 1);  // px/s²
+    const DRAG   = hyper ? HYPER_DRAG : 0.987;
 
     if (keys['ArrowLeft'])  this.angle -= ROT * dt;
     if (keys['ArrowRight']) this.angle += ROT * dt;
@@ -239,11 +246,12 @@ class Ship {
 
     // Llama del propulsor
     if (this.thrusting && Math.random() > 0.35) {
+      const hyper = this.hyperThrust > 0;
       ctx.beginPath();
       ctx.moveTo(-8, -4);
-      ctx.lineTo(-8 - rand(6, 14), 0);
+      ctx.lineTo(-8 - (hyper ? rand(16, 30) : rand(6, 14)), 0);
       ctx.lineTo(-8,  4);
-      ctx.strokeStyle = 'rgba(255, 130, 0, 0.85)';
+      ctx.strokeStyle = hyper ? 'rgba(255, 0, 255, 0.9)' : 'rgba(255, 130, 0, 0.85)';
       ctx.stroke();
     }
 
@@ -314,6 +322,7 @@ class PowerUp {
       shield: { color: '#4af', label: 'S',  font: 'bold 13px monospace' },
       slow:   { color: '#f44', label: 'SM', font: 'bold 10px monospace' },
       nova:   { color: '#fa0', label: 'N',  font: 'bold 13px monospace' },
+      hyper:  { color: '#f0f', label: 'H',  font: 'bold 13px monospace' },
     };
     const { color, label, font } = STYLE[this.type];
     ctx.save();
@@ -369,7 +378,7 @@ let ship, bullets, asteroids, particles, powerUps;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
-let killCount, powerUpDropAt, shieldDropAt, slowDropAt, novaDropPending;
+let killCount, powerUpDropAt, shieldDropAt, slowDropAt, hyperDropAt, novaDropPending;
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -393,16 +402,24 @@ function initGame() {
   lives  = 3;
   level  = 1;
   state  = 'playing';
-  killCount     = 0;
-  powerUpDropAt = randInt(3, 12);
-  do {
-    shieldDropAt = randInt(3, 12);
-  } while (shieldDropAt === powerUpDropAt);
-  do {
-    slowDropAt = randInt(3, 12);
-  } while (slowDropAt === powerUpDropAt || slowDropAt === shieldDropAt);
-  novaDropPending = true;
+  scheduleDrops();
   spawnAsteroids(4);
+}
+
+function scheduleDrops() {
+  killCount = 0;
+  const taken = [];
+  const pick = () => {
+    let n;
+    do { n = randInt(3, 12); } while (taken.includes(n));
+    taken.push(n);
+    return n;
+  };
+  powerUpDropAt = pick();
+  shieldDropAt  = pick();
+  slowDropAt    = pick();
+  hyperDropAt   = pick();
+  novaDropPending = true;
 }
 
 function nextLevel() {
@@ -410,6 +427,7 @@ function nextLevel() {
   bullets   = [];
   particles = [];
   ship.reset();
+  scheduleDrops();
   spawnAsteroids(3 + level);
 }
 
@@ -434,6 +452,7 @@ function killShip() {
   ship.tripleShot = 0;
   ship.shield = 0;
   ship.slowMotion = 0;
+  ship.hyperThrust = 0;
   lives--;
   if (lives <= 0) {
     state = 'gameover';
@@ -498,6 +517,7 @@ function update(dt) {
         if (killCount === powerUpDropAt) powerUps.push(new PowerUp(a.x, a.y, 'triple'));
         if (killCount === shieldDropAt)  powerUps.push(new PowerUp(a.x, a.y, 'shield'));
         if (killCount === slowDropAt)    powerUps.push(new PowerUp(a.x, a.y, 'slow'));
+        if (killCount === hyperDropAt)   powerUps.push(new PowerUp(a.x, a.y, 'hyper'));
         if (novaDropPending && asteroids.length >= NOVA_MIN_ASTEROIDS) {
           powerUps.push(new PowerUp(a.x, a.y, 'nova'));
           novaDropPending = false;
@@ -533,6 +553,7 @@ function update(dt) {
         if (p.type === 'shield') ship.shield = 5;
         else if (p.type === 'slow') ship.slowMotion = SLOW_DURATION;
         else if (p.type === 'nova') ship.novaBomb = true;
+        else if (p.type === 'hyper') ship.hyperThrust = HYPER_DURATION;
         else ship.tripleShot = 5;
         explode(p.x, p.y, 10);
       }
@@ -590,12 +611,23 @@ function drawHUD() {
   if (ship.slowMotion > 0) {
     ctx.fillStyle = '#f44';
     ctx.fillText(`SLOW  ${Math.ceil(ship.slowMotion)}s`, 14, statusY);
-    statusY += 20;
   }
-  if (ship.novaBomb) {
-    ctx.fillStyle = '#fa0';
-    ctx.fillText('NOVA  [B]', 14, statusY);
-  }
+}
+
+function drawShipStatus() {
+  if (ship.dead) return;
+  const lines = [];
+  if (ship.hyperThrust > 0) lines.push(['#f0f', `HIPER ${Math.ceil(ship.hyperThrust)}s`]);
+  if (ship.novaBomb)        lines.push(['#fa0', 'NOVA [B]']);
+  if (lines.length === 0) return;
+
+  const y0 = ship.y + 34 + (lines.length - 1) * 13 > H ? ship.y - 30 - (lines.length - 1) * 13 : ship.y + 34;
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  lines.forEach(([color, text], i) => {
+    ctx.fillStyle = color;
+    ctx.fillText(text, ship.x, y0 + i * 13);
+  });
 }
 
 function drawOverlay(title, sub) {
@@ -617,6 +649,7 @@ function draw() {
   powerUps.forEach(p => p.draw());
   bullets.forEach(b => b.draw());
   ship.draw();
+  drawShipStatus();
 
   drawHUD();
 
